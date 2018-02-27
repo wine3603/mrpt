@@ -11,6 +11,7 @@
 #include <mrpt/io/CFileOutputStream.h>
 #include <mrpt/obs/CObservation2DRangeScan.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
+#include <mrpt/obs/CObservationVelodyneScan.h>
 #include <mrpt/maps/CPointsMap.h>
 #include <mrpt/serialization/CArchive.h>
 
@@ -34,6 +35,28 @@ bool COctoMapBase<OCTREE, OCTREE_NODE>::
 	CPose3D robotPose3D;
 	if (robotPose)  // Default values are (0,0,0)
 		robotPose3D = (*robotPose);
+
+	// Sensor_pose = robot_pose (+) sensor_pose_on_robot
+	CPose3D sensorPose(UNINITIALIZED_POSE), sensorOnTheRobot(UNINITIALIZED_POSE);
+	obs->getSensorPose(sensorOnTheRobot);
+	sensorPose.composeFrom(robotPose3D, sensorOnTheRobot);
+	sensorPt =
+		octomap::point3d(sensorPose.x(), sensorPose.y(), sensorPose.z());
+	// For quicker access to values as "float" instead of "doubles":
+	mrpt::math::CMatrixDouble44 H;
+	robotPose3D.getHomogeneousMatrix(H);
+	const float m00 = H.get_unsafe(0, 0);
+	const float m01 = H.get_unsafe(0, 1);
+	const float m02 = H.get_unsafe(0, 2);
+	const float m03 = H.get_unsafe(0, 3);
+	const float m10 = H.get_unsafe(1, 0);
+	const float m11 = H.get_unsafe(1, 1);
+	const float m12 = H.get_unsafe(1, 2);
+	const float m13 = H.get_unsafe(1, 3);
+	const float m20 = H.get_unsafe(2, 0);
+	const float m21 = H.get_unsafe(2, 1);
+	const float m22 = H.get_unsafe(2, 2);
+	const float m23 = H.get_unsafe(2, 3);
 
 	if (IS_CLASS(obs, CObservation2DRangeScan))
 	{
@@ -86,11 +109,6 @@ bool COctoMapBase<OCTREE, OCTREE_NODE>::
 		// (coordinates are wrt the robot base)
 		if (!o->hasPoints3D) return false;
 
-		// Sensor_pose = robot_pose (+) sensor_pose_on_robot
-		CPose3D sensorPose(UNINITIALIZED_POSE);
-		sensorPose.composeFrom(robotPose3D, o->sensorPose);
-		sensorPt =
-			octomap::point3d(sensorPose.x(), sensorPose.y(), sensorPose.z());
 
 		o->load();  // Just to make sure the points are loaded from an external
 		// source, if that's the case...
@@ -99,28 +117,49 @@ bool COctoMapBase<OCTREE, OCTREE_NODE>::
 		// Transform 3D point cloud:
 		scan.reserve(sizeRangeScan);
 
-		// For quicker access to values as "float" instead of "doubles":
-		mrpt::math::CMatrixDouble44 H;
-		robotPose3D.getHomogeneousMatrix(H);
-		const float m00 = H.get_unsafe(0, 0);
-		const float m01 = H.get_unsafe(0, 1);
-		const float m02 = H.get_unsafe(0, 2);
-		const float m03 = H.get_unsafe(0, 3);
-		const float m10 = H.get_unsafe(1, 0);
-		const float m11 = H.get_unsafe(1, 1);
-		const float m12 = H.get_unsafe(1, 2);
-		const float m13 = H.get_unsafe(1, 3);
-		const float m20 = H.get_unsafe(2, 0);
-		const float m21 = H.get_unsafe(2, 1);
-		const float m22 = H.get_unsafe(2, 2);
-		const float m23 = H.get_unsafe(2, 3);
-
 		mrpt::math::TPoint3Df pt;
 		for (size_t i = 0; i < sizeRangeScan; i++)
 		{
 			pt.x = o->points3D_x[i];
 			pt.y = o->points3D_y[i];
 			pt.z = o->points3D_z[i];
+
+			// Valid point?
+			if (pt.x != 0 || pt.y != 0 || pt.z != 0)
+			{
+				// Translation:
+				const float gx = m00 * pt.x + m01 * pt.y + m02 * pt.z + m03;
+				const float gy = m10 * pt.x + m11 * pt.y + m12 * pt.z + m13;
+				const float gz = m20 * pt.x + m21 * pt.y + m22 * pt.z + m23;
+
+				// Add to this map:
+				scan.push_back(gx, gy, gz);
+			}
+		}
+		return true;
+	}
+	else if (IS_CLASS(obs, CObservationVelodyneScan))
+	{
+		const CObservationVelodyneScan* o =
+			static_cast<const CObservationVelodyneScan*>(obs);
+
+		int insert_decimation = 50;
+
+		// Automatically generate pointcloud if needed:
+		if (!o->point_cloud.size())
+			const_cast<CObservationVelodyneScan*>(o)->generatePointCloud();
+
+		const size_t sizeRangeScan = o->point_cloud.size();
+
+		// Transform 3D point cloud:
+		scan.reserve(sizeRangeScan/ insert_decimation);
+
+		mrpt::math::TPoint3Df pt;
+		for (size_t i = 0; i < sizeRangeScan; i+=insert_decimation)
+		{
+			pt.x = o->point_cloud.x[i];
+			pt.y = o->point_cloud.y[i];
+			pt.z = o->point_cloud.z[i];
 
 			// Valid point?
 			if (pt.x != 0 || pt.y != 0 || pt.z != 0)

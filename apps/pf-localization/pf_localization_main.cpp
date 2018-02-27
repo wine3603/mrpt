@@ -39,6 +39,7 @@
 #include <mrpt/math/distributions.h>
 #include <mrpt/math/utils.h>
 #include <mrpt/system/CTicTac.h>
+#include <mrpt/system/CTimeLogger.h>
 #include <mrpt/io/CFileOutputStream.h>
 #include <mrpt/io/CFileGZOutputStream.h>
 #include <mrpt/io/CFileGZInputStream.h>
@@ -127,6 +128,8 @@ int main(int argc, char** argv)
 void do_pf_localization(
 	const std::string& ini_fil, const std::string& cmdline_rawlog_file)
 {
+	mrpt::system::CTimeLogger timlog;
+
 	ASSERT_FILE_EXISTS_(ini_fil);
 
 	CConfigFile cfg(ini_fil);
@@ -442,6 +445,7 @@ void do_pf_localization(
 
 			// Initialize the PDF:
 			// -----------------------------
+			timlog.enter("init_pdf");
 			tictac.Tic();
 			if (!cfg.read_bool(
 					sect, "init_PDF_mode", false, /*Fail if not found*/ true))
@@ -458,6 +462,8 @@ void do_pf_localization(
 					DEG2RAD(cfg.read_float(sect, "init_PDF_min_phi_deg", -180)),
 					DEG2RAD(cfg.read_float(sect, "init_PDF_max_phi_deg", 180)),
 					PARTICLE_COUNT);
+
+			timlog.leave("init_pdf");
 
 			printf(
 				"PDF of %u particles initialized in %.03fms\n", M,
@@ -496,6 +502,7 @@ void do_pf_localization(
 				CSensoryFrame::Ptr observations;
 				CObservation::Ptr obs;
 
+				timlog.enter("rawlog_get");
 				if (!CRawlog::getActionObservationPairOrObservation(
 						arch,  // In stream
 						action, observations,  // Out pair <action,SF>, or:
@@ -503,9 +510,11 @@ void do_pf_localization(
 						rawlogEntry  // In/Out index counter.
 						))
 				{
+					timlog.leave("rawlog_get");
 					end = true;
 					continue;
 				}
+				timlog.leave("rawlog_get");
 
 				// Determine if we are reading a Act-SF or an Obs-only rawlog:
 				if (obs)
@@ -772,12 +781,14 @@ void do_pf_localization(
 								(unsigned int)step,
 								(unsigned int)pdf.particlesCount());
 
+						timlog.enter("pf_execute");
 						PF.executeOn(
 							pdf,
 							action.get(),  // Action
 							observations.get(),  // Obs.
 							&PF_stats  // Output statistics
 							);
+						timlog.leave("pf_execute");
 
 						if (!SAVE_STATS_ONLY)
 							printf(
